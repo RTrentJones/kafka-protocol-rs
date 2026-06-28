@@ -860,7 +860,8 @@ impl Record {
         }
         let num_headers = num_headers as usize;
 
-        let mut headers = IndexMap::with_capacity(num_headers);
+        // Cap the prealloc from the wire-supplied header count (RTrentJones/pg_kafka SEC-9).
+        let mut headers = IndexMap::with_capacity(num_headers.min(types::MAX_DECODE_PREALLOC));
         for _ in 0..num_headers {
             // Key len
             let key_len: i32 = types::VarInt.decode(buf)?;

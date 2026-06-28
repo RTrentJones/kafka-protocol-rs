@@ -10,6 +10,16 @@ use anyhow::{bail, Result};
 use std::convert::TryFrom;
 use std::string::String as StdString;
 
+/// Upper bound on the number of array elements pre-allocated from a wire-supplied length.
+///
+/// Patched for RTrentJones/pg_kafka (audit finding SEC-9): a crafted request can declare a huge
+/// array length, and `Vec::with_capacity(len)` on it allocates `len * size_of::<T>()` up front —
+/// gigabytes — which fails and *aborts the process* (this is not an unwinding panic, so it cannot
+/// be caught). Capping the capacity *hint* bounds the up-front allocation; the `Vec` still grows
+/// if the data genuinely contains more elements (each element is bounds-checked as it is decoded),
+/// so correctness and behavior are preserved for honest inputs.
+pub(crate) const MAX_DECODE_PREALLOC: usize = 16 * 1024;
+
 macro_rules! define_copy_impl {
     ($e:ident, $t:ty) => (
         impl Encoder<$t> for $e {
@@ -985,7 +995,7 @@ impl<T, E: Decoder<T>> Decoder<Option<Vec<T>>> for Array<E> {
         match Int32.decode(buf)? {
             -1 => Ok(None),
             n if n >= 0 => {
-                let mut result = Vec::with_capacity(n as usize);
+                let mut result = Vec::with_capacity((n as usize).min(MAX_DECODE_PREALLOC));
                 for _ in 0..n {
                     result.push(self.0.decode(buf)?);
                 }
@@ -1093,7 +1103,8 @@ impl<T, E: Decoder<T>> Decoder<Option<Vec<T>>> for CompactArray<E> {
         match UnsignedVarInt.decode(buf)? {
             0 => Ok(None),
             n => {
-                let mut result = Vec::with_capacity((n - 1) as usize);
+                let mut result =
+                    Vec::with_capacity(((n - 1) as usize).min(MAX_DECODE_PREALLOC));
                 for _ in 1..n {
                     result.push(self.0.decode(buf)?);
                 }
