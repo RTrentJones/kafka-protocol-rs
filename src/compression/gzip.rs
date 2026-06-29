@@ -8,7 +8,7 @@ use flate2::Compression;
 
 use crate::protocol::buf::{ByteBuf, ByteBufMut};
 
-use super::{Compressor, Decompressor};
+use super::{BoundedWriter, Compressor, Decompressor, MAX_DECOMPRESSED_SIZE};
 
 /// Gzip compression algorithm. See [Kafka's broker configuration](https://kafka.apache.org/documentation/#brokerconfigs_compression.type)
 /// for more information.
@@ -41,8 +41,10 @@ impl<B: ByteBuf> Decompressor<B> for Gzip {
     {
         let mut tmp = BytesMut::new();
 
-        // Decompress directly from the input buffer
-        let mut d = GzDecoder::new((&mut tmp).writer());
+        // Decompress directly from the input buffer, bounding the output so a crafted "bomb" cannot
+        // inflate without limit (SEC-5, see MAX_DECOMPRESSED_SIZE).
+        let writer = BoundedWriter::new((&mut tmp).writer(), MAX_DECOMPRESSED_SIZE);
+        let mut d = GzDecoder::new(writer);
         d.write_all(&buf.copy_to_bytes(buf.remaining()))
             .context("Failed to decompress gzip")?;
         d.finish().context("Failed to decompress gzip")?;

@@ -4,7 +4,7 @@ use snap::raw::*;
 
 use crate::protocol::buf::{ByteBuf, ByteBufMut};
 
-use super::{Compressor, Decompressor};
+use super::{Compressor, Decompressor, MAX_DECOMPRESSED_SIZE};
 
 /// Kafka variant of the snappy compression algorithm. See
 /// https://github.com/xerial/snappy-java?tab=readme-ov-file#compatibility-notes for notes about
@@ -81,6 +81,11 @@ impl<B: ByteBuf> Decompressor<B> for Snappy {
         {
             let compressed = compressed.copy_to_bytes(compressed.remaining());
             let actual_len = decompress_len(&compressed).context("failed to read snappy header")?;
+            // SEC-5: the uncompressed length is read straight from the (attacker-controlled) header
+            // and used to allocate; reject a decompression bomb before zeroing gigabytes.
+            if actual_len > MAX_DECOMPRESSED_SIZE {
+                anyhow::bail!("snappy decompressed size {actual_len} exceeds the maximum allowed");
+            }
             let mut tmp = BytesMut::zeroed(actual_len);
             Decoder::new()
                 .decompress(&compressed, &mut tmp)
@@ -105,10 +110,12 @@ impl<B: ByteBuf> Decompressor<B> for Snappy {
             let uncompressed_block_length = decompress_len(&compressed_block)
                 .context("failed to get snappy uncompressed length")?;
             let uncompressed_block_start = uncompressed.len();
-            uncompressed.resize(
-                uncompressed_block_start.saturating_add(uncompressed_block_length),
-                0,
-            );
+            let new_len = uncompressed_block_start.saturating_add(uncompressed_block_length);
+            // SEC-5: bound the accumulated output across all blocks to guard against a bomb.
+            if new_len > MAX_DECOMPRESSED_SIZE {
+                anyhow::bail!("snappy decompressed size {new_len} exceeds the maximum allowed");
+            }
+            uncompressed.resize(new_len, 0);
 
             Decoder::new()
                 .decompress(
@@ -226,6 +233,19 @@ mod tests {
         // Chop off all the record batch bytes before the records
         expected_bytes.advance(61);
         assert_eq!(expected_bytes, decompressed);
+    }
+
+    #[test]
+    fn decompression_rejects_bomb() {
+        // A raw-snappy header declaring ~512 MiB of output must be rejected by the size cap (SEC-5)
+        // before any allocation, rather than attempting to zero half a gigabyte of memory.
+        let mut raw_bytes = Bytes::from_static(&[0x80, 0x80, 0x80, 0x80, 0x02, 0x00]);
+        let result = Snappy::decompress(&mut raw_bytes, |buf| {
+            let mut out = Bytes::new();
+            std::mem::swap(buf, &mut out);
+            Ok::<_, anyhow::Error>(out)
+        });
+        assert!(result.is_err(), "decompression bomb must be rejected");
     }
 
     #[test]

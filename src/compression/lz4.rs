@@ -5,7 +5,7 @@ use lz4::BlockMode;
 use lz4::{Decoder, EncoderBuilder};
 use std::io;
 
-use super::{Compressor, Decompressor};
+use super::{BoundedWriter, Compressor, Decompressor, MAX_DECOMPRESSED_SIZE};
 
 /// Gzip compression algorithm. See [Kafka's broker configuration](https://kafka.apache.org/documentation/#brokerconfigs_compression.type)
 /// for more information.
@@ -42,7 +42,8 @@ impl<B: ByteBuf> Decompressor<B> for Lz4 {
     where
         F: FnOnce(&mut Self::Buf) -> Result<R>,
     {
-        let mut tmp = BytesMut::new().writer();
+        // Bound the decompressed output to guard against decompression bombs (SEC-5).
+        let mut tmp = BoundedWriter::new(BytesMut::new().writer(), MAX_DECOMPRESSED_SIZE);
 
         // Allocate a temporary buffer to hold the uncompressed bytes
         let buf = buf.copy_to_bytes(buf.remaining());
@@ -50,7 +51,7 @@ impl<B: ByteBuf> Decompressor<B> for Lz4 {
         let mut decoder = Decoder::new(buf.reader()).context("Failed to decompress lz4")?;
         io::copy(&mut decoder, &mut tmp).context("Failed to decompress lz4")?;
 
-        f(&mut tmp.into_inner().into())
+        f(&mut tmp.into_inner().into_inner().into())
     }
 }
 
