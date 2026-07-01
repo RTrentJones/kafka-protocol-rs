@@ -369,7 +369,14 @@ impl Decoder<Option<StdString>> for String {
         match Int16.decode(buf)? {
             -1 => Ok(None),
             n if n >= 0 => {
-                let mut strbuf = vec![0; n as usize];
+                let len = n as usize;
+                if len > buf.remaining() {
+                    bail!(
+                        "String length {len} exceeds remaining buffer ({})",
+                        buf.remaining()
+                    );
+                }
+                let mut strbuf = vec![0; len];
                 buf.try_copy_to_slice(&mut strbuf)?;
                 Ok(Some(std::string::String::from_utf8(strbuf)?))
             }
@@ -521,7 +528,14 @@ impl Decoder<Option<StdString>> for CompactString {
         match UnsignedVarInt.decode(buf)? {
             0 => Ok(None),
             n => {
-                let mut strbuf = vec![0; (n - 1) as usize];
+                let len = (n - 1) as usize;
+                if len > buf.remaining() {
+                    bail!(
+                        "String length {len} exceeds remaining buffer ({})",
+                        buf.remaining()
+                    );
+                }
+                let mut strbuf = vec![0; len];
                 buf.try_copy_to_slice(&mut strbuf)?;
                 Ok(Some(std::string::String::from_utf8(strbuf)?))
             }
@@ -665,7 +679,14 @@ impl Decoder<Option<Vec<u8>>> for Bytes {
         match Int32.decode(buf)? {
             -1 => Ok(None),
             n if n >= 0 => {
-                let mut data = vec![0; n as usize];
+                let len = n as usize;
+                if len > buf.remaining() {
+                    bail!(
+                        "Data length {len} exceeds remaining buffer ({})",
+                        buf.remaining()
+                    );
+                }
+                let mut data = vec![0; len];
                 buf.try_copy_to_slice(&mut data)?;
                 Ok(Some(data))
             }
@@ -814,7 +835,14 @@ impl Decoder<Option<Vec<u8>>> for CompactBytes {
         match UnsignedVarInt.decode(buf)? {
             0 => Ok(None),
             n => {
-                let mut data = vec![0; (n - 1) as usize];
+                let len = (n - 1) as usize;
+                if len > buf.remaining() {
+                    bail!(
+                        "Data length {len} exceeds remaining buffer ({})",
+                        buf.remaining()
+                    );
+                }
+                let mut data = vec![0; len];
                 buf.try_copy_to_slice(&mut data)?;
                 Ok(Some(data))
             }

@@ -476,7 +476,14 @@ impl RecordBatchDecoder {
         version: i8,
         records: &mut Vec<Record>,
     ) -> Result<()> {
-        records.reserve(batch_decode_info.record_count);
+        // SEC-9 residual: `record_count` is read straight from the wire and
+        // validated only `>= 0`, so an attacker can claim `i32::MAX` records in a
+        // ~60-byte batch. Reserving that up front (`count * size_of::<Record>()`,
+        // ~300 GB) hits `handle_alloc_error` -> `abort()`, which the caller's
+        // `catch_unwind` cannot contain. Cap the pre-allocation hint; the loop
+        // below still decodes every declared record and errors cleanly on the
+        // short buffer (`try_get_bytes` bounds-checks each read).
+        records.reserve(batch_decode_info.record_count.min(types::MAX_DECODE_PREALLOC));
         for _ in 0..batch_decode_info.record_count {
             records.push(Record::decode_new(buf, batch_decode_info, version)?);
         }
@@ -992,5 +999,35 @@ mod tests {
             2,
         )
         .expect("decode works");
+    }
+
+    /// SEC-9 residual regression: a RecordBatch that declares a huge
+    /// `record_count` must return an `Err` (the buffer runs out) rather than
+    /// abort the process on a ~300 GB up-front `reserve`. Before the cap this
+    /// call aborts the test binary (an allocation failure, uncatchable by
+    /// `catch_unwind`); after the cap the reserve is bounded and the decode loop
+    /// errors cleanly on the empty buffer.
+    #[test]
+    fn huge_record_count_errors_instead_of_aborting() {
+        let info = BatchDecodeInfo {
+            record_count: i32::MAX as usize,
+            timestamp_type: TimestampType::Creation,
+            min_offset: 0,
+            min_timestamp: 0,
+            base_sequence: 0,
+            transactional: false,
+            control: false,
+            partition_leader_epoch: 0,
+            producer_id: 0,
+            producer_epoch: 0,
+        };
+        let mut buf = Bytes::new();
+        let mut records = Vec::new();
+        let result =
+            RecordBatchDecoder::decode_new_records(&mut buf, &info, 2, &mut records);
+        assert!(
+            result.is_err(),
+            "a huge record_count must error on the short buffer, not abort"
+        );
     }
 }

@@ -57,12 +57,16 @@ pub const MAX_DECOMPRESSED_SIZE: usize = 256 * 1024 * 1024;
 
 /// A [`std::io::Write`] adapter that fails once more than `limit` bytes have been written, so a
 /// streaming decompressor cannot inflate without bound (see [`MAX_DECOMPRESSED_SIZE`]).
+// Only used by the per-format decompressors, which are feature-gated; unused under
+// `--no-default-features`.
+#[allow(dead_code)]
 pub(crate) struct BoundedWriter<W> {
     inner: W,
     written: usize,
     limit: usize,
 }
 
+#[allow(dead_code)]
 impl<W> BoundedWriter<W> {
     pub(crate) fn new(inner: W, limit: usize) -> Self {
         Self {
